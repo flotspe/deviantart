@@ -191,8 +191,10 @@ class DeviantArtClient:
         return self._request(
             "POST",
             "/gallery/folders/remove_deviations",
-            params={"folderid": folderid},
-            data={"deviationids[]": deviationids},
+            data={
+                "folderid" : folderid,
+                "deviationids[]": deviationids
+            },
         )
 
     def copy_deviations_to_folder(self, target_folderid: str, deviationids: List[str]) -> dict:
@@ -202,7 +204,8 @@ class DeviantArtClient:
             "/gallery/folders/copy_deviations",
             data={
                 "target_folderid": target_folderid,
-                "deviationids[]": deviationids},
+                "deviationids[]": deviationids
+            },
         )
 
 
