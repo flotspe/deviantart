@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Sync DeviantArt Featured gallery to your top N most-favourited deviations.
+Sync chosen DeviantArt gallery to your top N most-favourited deviations.
 
 Behavior:
-- Identify "Featured" folderid
-- Remove all existing deviations from Featured
+- Identify chosen folderid
+- Remove all existing deviations from chosen gallery
 - Compute top N deviations by stats.favourites across your gallery folders
-- Copy those top N into Featured
+- Copy those top N into chosen gallery
 
 Notes:
-- DeviantArt gallery folder modification endpoints require scopes: browse + gallery. :contentReference[oaicite:6]{index=6}
-- OAuth2 token refresh uses https://www.deviantart.com/oauth2/token :contentReference[oaicite:7]{index=7}
-- /gallery/{folderid} supports pagination (offset/limit) and returns deviation objects with stats. :contentReference[oaicite:8]{index=8}
+- DeviantArt gallery folder modification endpoints require scopes: browse + gallery.
+- OAuth2 token refresh uses https://www.deviantart.com/oauth2/token
+- /gallery/{folderid} supports pagination (offset/limit) and returns deviation objects with stats.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import requests
 API_BASE = "https://www.deviantart.com/api/v1/oauth2"
 OAUTH_TOKEN_URL = "https://www.deviantart.com/oauth2/token"
 
-# API constraints in docs for deviationids arrays: max 24 per request for copy/remove endpoints. :contentReference[oaicite:9]{index=9}
+# API constraints in docs for deviationids arrays: max 24 per request for copy/remove endpoints.
 MAX_DEVIATIONIDS_PER_MUTATION = 24
 
 
@@ -114,7 +114,7 @@ class DeviantArtClient:
         token = self._get_access_token()
 
         # DeviantArt API examples commonly pass access_token as a parameter; both styles are typically accepted.
-        # We use access_token param to match their console examples. :contentReference[oaicite:11]{index=11}
+        # We use access_token param to match their console examples.
         params = dict(params or {})
         params["access_token"] = token
 
@@ -167,7 +167,7 @@ class DeviantArtClient:
     # --- API wrappers ---
 
     def list_gallery_folders(self, *, calculate_size: bool = True, offset: int = 0, limit: int = 50) -> dict:
-        # GET /gallery/folders :contentReference[oaicite:12]{index=12}
+        # GET /gallery/folders
         return self._request(
             "GET",
             "/gallery/folders",
@@ -179,7 +179,7 @@ class DeviantArtClient:
         )
 
     def get_gallery_folder_contents(self, folderid: str, *, offset: int = 0, limit: int = 24) -> dict:
-        # GET /gallery/{folderid} :contentReference[oaicite:13]{index=13}
+        # GET /gallery/{folderid}
         return self._request(
             "GET",
             f"/gallery/{folderid}",
@@ -187,7 +187,7 @@ class DeviantArtClient:
         )
 
     def remove_deviations_from_folder(self, folderid: str, deviationids: List[str]) -> dict:
-        # POST /gallery/folders/remove_deviations :contentReference[oaicite:14]{index=14}
+        # POST /gallery/folders/remove_deviations
         return self._request(
             "POST",
             "/gallery/folders/remove_deviations",
@@ -198,7 +198,7 @@ class DeviantArtClient:
         )
 
     def copy_deviations_to_folder(self, target_folderid: str, deviationids: List[str]) -> dict:
-        # POST /gallery/folders/copy_deviations :contentReference[oaicite:15]{index=15}
+        # POST /gallery/folders/copy_deviations
         return self._request(
             "POST",
             "/gallery/folders/copy_deviations",
@@ -214,24 +214,8 @@ def chunked(items: List[str], n: int) -> Iterable[List[str]]:
         yield items[i : i + n]
 
 
-def find_featured_folderid(folders: List[dict]) -> str:
-    # The folder is typically named "Featured" and is parent=null. :contentReference[oaicite:16]{index=16}
-    for f in folders:
-        if (f.get("name") or "").strip().lower() == "featured" and f.get("parent") is None:
-            fid = f.get("folderid")
-            if fid:
-                return fid
-    # Fallback: any folder named Featured
-    for f in folders:
-        if (f.get("name") or "").strip().lower() == "featured":
-            fid = f.get("folderid")
-            if fid:
-                return fid
-    raise RuntimeError('Could not locate a "Featured" folder in /gallery/folders response.')
-
 def find_folderid(folder_name: str, folders: List[dict]) -> str:
     for f in folders:
-        print(f"is {f.get("name", "")} equal to {folder_name}?")
         if (f.get("name") or "").strip().lower() == folder_name.lower():
             fid = f.get("folderid")
             if fid:
@@ -277,7 +261,7 @@ def fetch_all_deviations_across_folders(
                 did = dev.get("deviationid")
                 if not did:
                     continue
-                # deviation.stats.favourites appears in deviation objects returned from gallery endpoints. :contentReference[oaicite:17]{index=17}
+                # deviation.stats.favourites appears in deviation objects returned from gallery endpoints.
                 favs = int(((dev.get("stats") or {}).get("favourites")) or 0)
                 # Keep max in case the same deviation appears in multiple folders with any discrepancy
                 favs_by_deviation[did] = max(favs_by_deviation.get(did, 0), favs)
@@ -297,7 +281,7 @@ def fetch_all_deviations_across_folders(
     return favs_by_deviation
 
 
-def fetch_featured_deviationids(client: DeviantArtClient, featured_folderid: str) -> List[str]:
+def fetch_folder_deviationids(client: DeviantArtClient, featured_folderid: str) -> List[str]:
     ids: List[str] = []
     offset = 0
     while True:
@@ -345,27 +329,27 @@ def main() -> int:
     print("Fetching gallery folders...")
     folders = fetch_all_folders(client)
     for folder in folders:
-        print(folder["name"], folder["parent"])
+        print(folder["name"])
     
+    REQUESTED_FOLDER = "Top 20 Favorites"
+    folderid = find_folderid(REQUESTED_FOLDER, folders)
+    print(f'Folder id: {folderid}')
 
-    featured_folderid = find_folderid("Top 20 Favorites", folders)
-    print(f'Featured folderid: {featured_folderid}')
-
-    # Collect all folderids (including featured). We’ll include everything for scoring;
-    # then we’ll reset featured and repopulate.
+    # Collect all folderids. We’ll include everything for scoring;
+    # then we’ll reset the requested folder and repopulate.
     folderids = [f["folderid"] for f in folders if f.get("folderid")]
 
-    print("Listing current Featured contents...")
-    featured_ids = fetch_featured_deviationids(client, featured_folderid)
-    print(f"Featured currently contains {len(featured_ids)} deviations.")
+    print("Listing current folder contents...")
+    deviation_ids = fetch_folder_deviationids(client, folderid)
+    print(f"'{REQUESTED_FOLDER}' currently contains {len(deviation_ids)} deviations.")
 
-    if featured_ids:
-        print("Removing all deviations from Featured...")
-        for batch in chunked(featured_ids, MAX_DEVIATIONIDS_PER_MUTATION):
-            resp = client.remove_deviations_from_folder(featured_folderid, batch)
+    if deviation_ids:
+        print(f"Removing all deviations from {REQUESTED_FOLDER}...")
+        for batch in chunked(deviation_ids, MAX_DEVIATIONIDS_PER_MUTATION):
+            resp = client.remove_deviations_from_folder(folderid, batch)
             if not resp.get("success"):
                 raise RuntimeError(f"Remove failed for batch of {len(batch)}: {resp}")
-        print("Featured cleared.")
+        print(f"{REQUESTED_FOLDER} cleared.")
 
     print("Fetching deviations across all folders to compute top favourites...")
     favs_by_dev = fetch_all_deviations_across_folders(
@@ -381,13 +365,13 @@ def main() -> int:
         print("No deviations found; nothing to copy.")
         return 0
 
-    print("Copying top deviations into Featured...")
+    print(f"Copying top deviations into {REQUESTED_FOLDER}...")
     for batch in chunked(top_ids, MAX_DEVIATIONIDS_PER_MUTATION):
-        resp = client.copy_deviations_to_folder(featured_folderid, batch)
+        resp = client.copy_deviations_to_folder(folderid, batch)
         if not resp.get("success"):
             raise RuntimeError(f"Copy failed for batch of {len(batch)}: {resp}")
 
-    print("Done. Featured updated.")
+    print(f"Done. {REQUESTED_FOLDER} updated.")
     return 0
 
 
