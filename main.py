@@ -15,16 +15,16 @@ Notes:
 """
 
 from __future__ import annotations
-from dotenv import load_dotenv
-from token_store import get_refresh_token, save_refresh_token, refresh_lock
 
 import os
 import sys
 import time
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional
 
 import requests
+from dotenv import load_dotenv
+from token_store import get_refresh_token, save_refresh_token, refresh_lock
 
 API_BASE = "https://www.deviantart.com/api/v1/oauth2"
 OAUTH_TOKEN_URL = "https://www.deviantart.com/oauth2/token"
@@ -156,7 +156,7 @@ class DeviantArtClient:
                 r.raise_for_status()
                 return r.json()
 
-            except requests.RequestException as e:
+            except requests.RequestException:
                 if attempt == self.max_retries:
                     raise
                 time.sleep(backoff)
@@ -250,7 +250,7 @@ def fetch_all_deviations_across_folders(
     """
     favs_by_deviation: Dict[str, int] = {}
 
-    for idx, folderid in enumerate(folderids, start=1):
+    for _, folderid in enumerate(folderids, start=1):
         offset = 0
         fetched_in_folder = 0
 
