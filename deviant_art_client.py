@@ -92,11 +92,9 @@ class DeviantArtClient:
 
         url = f"{API_BASE}{path}"
 
-        backoff = 1.0
+        backoff = self.min_delay_s
         for attempt in range(1, self.max_retries + 1):
             try:
-                time.sleep(self.min_delay_s)
-
                 r = self._session.request(
                     method=method.upper(),
                     url=url,
@@ -107,6 +105,7 @@ class DeviantArtClient:
 
                 # Token expired mid-run → refresh once and retry
                 if r.status_code == 401:
+                    time.sleep(self.min_delay_s)
                     self._refresh_access_token()
                     params["access_token"] = self._access_token  # type: ignore[assignment]
                     r = self._session.request(
@@ -119,7 +118,7 @@ class DeviantArtClient:
 
                 # Handle rate limiting / transient failures with backoff
                 if r.status_code in (429, 500, 502, 503, 504):
-                    if attempt == self.max_retries:
+                    if attempt >= self.max_retries:
                         r.raise_for_status()
                     time.sleep(backoff)
                     backoff *= 2
