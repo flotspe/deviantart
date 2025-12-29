@@ -128,7 +128,7 @@ class DeviantArtClient:
                 return r.json()
 
             except requests.RequestException:
-                if attempt == self.max_retries:
+                if attempt >= self.max_retries:
                     raise
                 time.sleep(backoff)
                 backoff *= 2
