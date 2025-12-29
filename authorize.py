@@ -34,7 +34,6 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 from dotenv import load_dotenv
-from token_store import save_refresh_token
 
 AUTHORIZE_URL = "https://www.deviantart.com/oauth2/authorize"
 TOKEN_URL = "https://www.deviantart.com/oauth2/token"
