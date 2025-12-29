@@ -20,6 +20,7 @@ import sys
 from dotenv import load_dotenv
 from deviant_art_client import DeviantArtClient, OAuthConfig
 from gallery import Gallery
+from authorize import get_refresh_token
 
 # API constraints in docs for deviationids arrays: max 24 per request for copy/remove endpoints.
 MAX_DEVIATIONIDS_PER_MUTATION = 24
@@ -31,6 +32,11 @@ def main() -> int:
     client_id = os.environ.get("DA_CLIENT_ID", "").strip()
     client_secret = os.environ.get("DA_CLIENT_SECRET", "").strip()
     refresh_token = os.environ.get("DA_REFRESH_TOKEN", "").strip()
+
+    if refresh_token == "":
+        refresh_token = get_refresh_token()
+        if not refresh_token:
+            raise RuntimeError("Couldn't acquire refresh token")
 
     top_n = int(os.environ.get("DA_TOP_N", "20"))
     # Optional: cap how many items to scan per folder (debug/speed). Leave unset for full scan.
