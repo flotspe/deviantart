@@ -14,292 +14,16 @@ Notes:
 - /gallery/{folderid} supports pagination (offset/limit) and returns deviation objects with stats.
 """
 
-from __future__ import annotations
-
 import os
 import sys
-import time
-from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional
 
-import requests
 from dotenv import load_dotenv
-from token_store import get_refresh_token, save_refresh_token, refresh_lock
-
-API_BASE = "https://www.deviantart.com/api/v1/oauth2"
-OAUTH_TOKEN_URL = "https://www.deviantart.com/oauth2/token"
+from deviant_art_client import DeviantArtClient, OAuthConfig
+from gallery import Gallery
 
 # API constraints in docs for deviationids arrays: max 24 per request for copy/remove endpoints.
 MAX_DEVIATIONIDS_PER_MUTATION = 24
-
-
-@dataclass
-class OAuthConfig:
-    client_id: str
-    client_secret: str
-    refresh_token: str
-
-
-class DeviantArtClient:
-    def __init__(
-        self,
-        oauth: OAuthConfig,
-        *,
-        user_agent: str = "featured-sync/1.0",
-        request_timeout_s: int = 30,
-        min_delay_s: float = 0.35,
-        max_retries: int = 6,
-    ) -> None:
-        self.oauth = oauth
-        self.user_agent = user_agent
-        self.request_timeout_s = request_timeout_s
-        self.min_delay_s = min_delay_s
-        self.max_retries = max_retries
-
-        self._access_token: Optional[str] = None
-        self._token_expires_at: float = 0.0
-
-        self._session = requests.Session()
-        self._session.headers.update({"User-Agent": self.user_agent})
-
-    def _refresh_access_token(self) -> str:
-        with refresh_lock():
-            self.oauth.refresh_token = get_refresh_token(self.oauth.refresh_token)
-
-            data = {
-                "grant_type": "refresh_token",
-                "client_id": self.oauth.client_id,
-                "client_secret": self.oauth.client_secret,
-                "refresh_token": self.oauth.refresh_token.strip(),
-            }
-
-            r = self._session.post(
-                OAUTH_TOKEN_URL,
-                data=data,
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "Accept": "application/json",
-                },
-                timeout=self.request_timeout_s,
-            )
-
-            if not r.ok:
-                raise RuntimeError(f"Token refresh failed ({r.status_code}): {r.text}")
-
-            payload = r.json()
-
-            access_token = payload.get("access_token")
-            expires_in = int(payload.get("expires_in", 3600))
-            if not access_token:
-                raise RuntimeError(f"Missing access_token in response: {payload}")
-
-            new_refresh = payload.get("refresh_token")
-            if new_refresh and new_refresh.strip():
-                if new_refresh.strip() != self.oauth.refresh_token.strip():
-                    save_refresh_token(new_refresh)
-                    self.oauth.refresh_token = new_refresh.strip()
-            else:
-                save_refresh_token(self.oauth.refresh_token)
-
-            self._access_token = access_token
-            self._token_expires_at = time.time() + expires_in - 60
-            return access_token
-
-    def _get_access_token(self) -> str:
-        if not self._access_token or time.time() >= self._token_expires_at:
-            return self._refresh_access_token()
-        return self._access_token
-
-    def _request(self, method: str, path: str, *, params: dict | None = None, data: dict | None = None) -> dict:
-        token = self._get_access_token()
-
-        # DeviantArt API examples commonly pass access_token as a parameter; both styles are typically accepted.
-        # We use access_token param to match their console examples.
-        params = dict(params or {})
-        params["access_token"] = token
-
-        url = f"{API_BASE}{path}"
-
-        backoff = 1.0
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                time.sleep(self.min_delay_s)
-
-                r = self._session.request(
-                    method=method.upper(),
-                    url=url,
-                    params=params,
-                    data=data,
-                    timeout=self.request_timeout_s,
-                )
-
-                # Token expired mid-run → refresh once and retry
-                if r.status_code == 401:
-                    self._refresh_access_token()
-                    params["access_token"] = self._access_token  # type: ignore[assignment]
-                    r = self._session.request(
-                        method=method.upper(),
-                        url=url,
-                        params=params,
-                        data=data,
-                        timeout=self.request_timeout_s,
-                    )
-
-                # Handle rate limiting / transient failures with backoff
-                if r.status_code in (429, 500, 502, 503, 504):
-                    if attempt == self.max_retries:
-                        r.raise_for_status()
-                    time.sleep(backoff)
-                    backoff *= 2
-                    continue
-
-                r.raise_for_status()
-                return r.json()
-
-            except requests.RequestException:
-                if attempt == self.max_retries:
-                    raise
-                time.sleep(backoff)
-                backoff *= 2
-
-        raise RuntimeError("Unreachable")
-
-    # --- API wrappers ---
-
-    def list_gallery_folders(self, *, calculate_size: bool = True, offset: int = 0, limit: int = 50) -> dict:
-        # GET /gallery/folders
-        return self._request(
-            "GET",
-            "/gallery/folders",
-            params={
-                "calculate_size": "1" if calculate_size else "0",
-                "offset": offset,
-                "limit": limit,
-            },
-        )
-
-    def get_gallery_folder_contents(self, folderid: str, *, offset: int = 0, limit: int = 24) -> dict:
-        # GET /gallery/{folderid}
-        return self._request(
-            "GET",
-            f"/gallery/{folderid}",
-            params={"offset": offset, "limit": limit},
-        )
-
-    def remove_deviations_from_folder(self, folderid: str, deviationids: List[str]) -> dict:
-        # POST /gallery/folders/remove_deviations
-        return self._request(
-            "POST",
-            "/gallery/folders/remove_deviations",
-            data={
-                "folderid" : folderid,
-                "deviationids[]": deviationids
-            },
-        )
-
-    def copy_deviations_to_folder(self, target_folderid: str, deviationids: List[str]) -> dict:
-        # POST /gallery/folders/copy_deviations
-        return self._request(
-            "POST",
-            "/gallery/folders/copy_deviations",
-            data={
-                "target_folderid": target_folderid,
-                "deviationids[]": deviationids
-            },
-        )
-
-
-def chunked(items: List[str], n: int) -> Iterable[List[str]]:
-    for i in range(0, len(items), n):
-        yield items[i : i + n]
-
-
-def find_folderid(folder_name: str, folders: List[dict]) -> str:
-    for f in folders:
-        if (f.get("name") or "").strip().lower() == folder_name.lower():
-            fid = f.get("folderid")
-            if fid:
-                return fid
-    raise RuntimeError(f'Could not locate a "{folder_name}" folder in /gallery/folders response.')
-
-
-def fetch_all_folders(client: DeviantArtClient) -> List[dict]:
-    all_folders: List[dict] = []
-    offset = 0
-    while True:
-        page = client.list_gallery_folders(calculate_size=True, offset=offset, limit=50)
-        results = page.get("results", [])
-        all_folders.extend(results)
-        if not page.get("has_more"):
-            break
-        next_offset = page.get("next_offset")
-        if next_offset is None:
-            break
-        offset = int(next_offset)
-    return all_folders
-
-
-def fetch_all_deviations_across_folders(
-    client: DeviantArtClient,
-    folderids: List[str],
-    *,
-    per_folder_limit_cap: Optional[int] = None,
-) -> Dict[str, int]:
-    """
-    Returns {deviationid: favourites_count} de-duplicated across folders.
-    """
-    favs_by_deviation: Dict[str, int] = {}
-
-    for _, folderid in enumerate(folderids, start=1):
-        offset = 0
-        fetched_in_folder = 0
-
-        while True:
-            page = client.get_gallery_folder_contents(folderid, offset=offset, limit=24)
-            results = page.get("results", [])
-            for dev in results:
-                did = dev.get("deviationid")
-                if not did:
-                    continue
-                # deviation.stats.favourites appears in deviation objects returned from gallery endpoints.
-                favs = int(((dev.get("stats") or {}).get("favourites")) or 0)
-                # Keep max in case the same deviation appears in multiple folders with any discrepancy
-                favs_by_deviation[did] = max(favs_by_deviation.get(did, 0), favs)
-
-            fetched_in_folder += len(results)
-
-            if per_folder_limit_cap is not None and fetched_in_folder >= per_folder_limit_cap:
-                break
-
-            if not page.get("has_more"):
-                break
-            next_offset = page.get("next_offset")
-            if next_offset is None:
-                break
-            offset = int(next_offset)
-
-    return favs_by_deviation
-
-
-def fetch_folder_deviationids(client: DeviantArtClient, featured_folderid: str) -> List[str]:
-    ids: List[str] = []
-    offset = 0
-    while True:
-        page = client.get_gallery_folder_contents(featured_folderid, offset=offset, limit=24)
-        results = page.get("results", [])
-        for dev in results:
-            did = dev.get("deviationid")
-            if did:
-                ids.append(did)
-
-        if not page.get("has_more"):
-            break
-        next_offset = page.get("next_offset")
-        if next_offset is None:
-            break
-        offset = int(next_offset)
-    return ids
-
+REQUESTED_FOLDER = "Top 20 Favorites"
 
 def main() -> int:
     # --- Configuration via env vars ---
@@ -325,14 +49,14 @@ def main() -> int:
         return 2
 
     client = DeviantArtClient(OAuthConfig(client_id, client_secret, refresh_token))
+    gallery = Gallery(client)
 
     print("Fetching gallery folders...")
-    folders = fetch_all_folders(client)
+    folders = gallery.fetch_all_folders()
     for folder in folders:
         print(folder["name"])
-    
-    REQUESTED_FOLDER = "Top 20 Favorites"
-    folderid = find_folderid(REQUESTED_FOLDER, folders)
+
+    folderid = gallery.find_folderid(REQUESTED_FOLDER, folders)
     print(f'Folder id: {folderid}')
 
     # Collect all folderids. We’ll include everything for scoring;
@@ -340,20 +64,20 @@ def main() -> int:
     folderids = [f["folderid"] for f in folders if f.get("folderid")]
 
     print("Listing current folder contents...")
-    deviation_ids = fetch_folder_deviationids(client, folderid)
+    deviation_ids = gallery.fetch_folder_deviationids(folderid)
     print(f"'{REQUESTED_FOLDER}' currently contains {len(deviation_ids)} deviations.")
 
     if deviation_ids:
         print(f"Removing all deviations from {REQUESTED_FOLDER}...")
-        for batch in chunked(deviation_ids, MAX_DEVIATIONIDS_PER_MUTATION):
-            resp = client.remove_deviations_from_folder(folderid, batch)
+        for batch in gallery.chunked(deviation_ids, MAX_DEVIATIONIDS_PER_MUTATION):
+            resp = gallery.remove_deviations_from_folder(folderid, batch)
             if not resp.get("success"):
                 raise RuntimeError(f"Remove failed for batch of {len(batch)}: {resp}")
         print(f"{REQUESTED_FOLDER} cleared.")
 
     print("Fetching deviations across all folders to compute top favourites...")
-    favs_by_dev = fetch_all_deviations_across_folders(
-        client, folderids, per_folder_limit_cap=per_folder_cap
+    favs_by_dev = gallery.fetch_all_deviations_across_folders(
+        folderids, per_folder_limit_cap=per_folder_cap
     )
     print(f"Scanned {len(favs_by_dev)} unique deviations.")
 
@@ -366,8 +90,8 @@ def main() -> int:
         return 0
 
     print(f"Copying top deviations into {REQUESTED_FOLDER}...")
-    for batch in chunked(top_ids, MAX_DEVIATIONIDS_PER_MUTATION):
-        resp = client.copy_deviations_to_folder(folderid, batch)
+    for batch in gallery.chunked(top_ids, MAX_DEVIATIONIDS_PER_MUTATION):
+        resp = gallery.copy_deviations_to_folder(folderid, batch)
         if not resp.get("success"):
             raise RuntimeError(f"Copy failed for batch of {len(batch)}: {resp}")
 
