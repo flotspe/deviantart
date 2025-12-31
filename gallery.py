@@ -1,4 +1,6 @@
 from typing import Dict, Iterable, List, Optional
+import json
+from datetime import datetime
 from deviant_art_client import DeviantArtClient
 
 class Gallery:
@@ -21,7 +23,7 @@ class Gallery:
         return self.client.request(
             "GET",
             f"/gallery/{folderid}",
-            params={"offset": offset, "limit": limit},
+            params={"offset": offset, "limit": limit, "mature_content":1},
         )
 
     def remove_deviations_from_folder(self, folderid: str, deviationids: List[str]) -> dict:
@@ -96,8 +98,15 @@ class Gallery:
                 page = self.get_gallery_folder_contents(folderid, offset=offset, limit=24)
                 results = page.get("results", [])
                 for dev in results:
+                    date_published_timestamp = dev.get("published_time")
+                    if not date_published_timestamp:
+                        continue
                     did = dev.get("deviationid")
                     if not did:
+                        continue
+                    date_published = datetime.fromtimestamp(int(date_published_timestamp))
+                    one_year_ago = datetime(datetime.today().year-1, datetime.today().month, datetime.today().day)
+                    if date_published<one_year_ago:
                         continue
                     # deviation.stats.favourites appears in deviation objects returned from gallery endpoints.
                     favs = int(((dev.get("stats") or {}).get("favourites")) or 0)
