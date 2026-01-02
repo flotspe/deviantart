@@ -1,5 +1,4 @@
 from typing import Dict, Iterable, List, Optional
-import json
 from datetime import datetime
 from deviant_art_client import DeviantArtClient
 
